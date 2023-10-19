@@ -65,14 +65,12 @@ static bool _bl0937_is_initialized              = false;
 
 static uint32_t _bl0937_task_stack_size;
 static uint32_t _bl0937_task_priority;
-static TaskHandle_t _bl0937_task_handle     = NULL;
 
 /* Private function prototypes -----------------------------------------------*/
-void _task_bl0937(void *arg);
+uint32_t _bl0937_get_pulse_in(uint32_t pin, uint32_t level, uint32_t timeout_us);
 
-esp_err_t _bl0937_init_task(void);
 esp_err_t _bl0937_init_interrupt(void);
-esp_err_t _bl0937_init_gpio(bl0937_config_t *config);
+esp_err_t _bl0937_init_gpio(void);
 
 void _bl0937_check_cf_signal();
 void _bl0937_check_cf1_signal();
@@ -84,15 +82,26 @@ void _bl0937_calculate_default_multipliers();
 /* Exported functions --------------------------------------------------------*/
 esp_err_t bl0937_init(bl0937_config_t *config)
 {
-    // TODO add error handling
-    
     _bl0937_current_mode    = config->initial_mode;
     _bl0937_pulse_timeout   = config->pulse_timeout;
     _bl0937_use_interrupts  = config->use_interrupts;
     _bl0937_task_stack_size = config->task_stack_size;
     _bl0937_task_priority   = config->task_priority;
 
-    if (_bl0937_init_gpio(config) != ESP_OK) {
+    // check pins
+    if (config->pins.cf_pin  < 0 ||
+        config->pins.cf1_pin < 0 ||
+        config->pins.sel_pin < 0) {
+        ESP_LOGE(TAG, "Pin configuration invalid!");
+        return ESP_FAIL;
+    }
+
+    _bl0937_cf_pin          = config->pins.cf_pin;
+    _bl0937_cf1_pin         = config->pins.cf1_pin;
+    _bl0937_sel_pin         = config->pins.sel_pin;
+
+
+    if (_bl0937_init_gpio() != ESP_OK) {
         ESP_LOGE(TAG, "Could not initalize GPIO!");
         return ESP_FAIL;
     }
@@ -104,17 +113,31 @@ esp_err_t bl0937_init(bl0937_config_t *config)
 
 void bl0937_deinit(void)
 {
-    if (_bl0937_is_initialized)
+    if (!_bl0937_is_initialized)
         return;
+
+    if (_bl0937_use_interrupts) {
+        // gpio_uninstall_isr_service();
+        if (gpio_isr_handler_remove(_bl0937_cf_pin) == ESP_ERR_INVALID_STATE) {
+            ESP_LOGE(TAG, "IRQs not initialized for deinit!");
+            return;
+        }
+        gpio_isr_handler_remove(_bl0937_cf1_pin);
+    }
 }
 
 esp_err_t bl0937_start(void)
 {
-    if (_bl0937_is_initialized) {
-        if (_bl0937_init_interrupt() != ESP_OK)
+    if (_bl0937_is_initialized && _bl0937_use_interrupts) {
+        if (_bl0937_init_interrupt() != ESP_OK) {
             ESP_LOGE(TAG, "Error in enabling interrupts");
-        return ESP_OK;//_bl0937_init_task();
+            return ESP_FAIL;
+        }
+        return ESP_OK;
+    } else if (_bl0937_is_initialized && !_bl0937_use_interrupts) {
+        return ESP_OK;
     } else {
+        ESP_LOGE(TAG, "BL0937 is not initalized!");
         return ESP_FAIL;
     }
 }
@@ -149,9 +172,8 @@ double bl0937_get_current(void)
 
     } else if (_bl0937_use_interrupts) {
         _bl0937_check_cf1_signal();
-
     } else if (_bl0937_mode == _bl0937_current_mode) {
-        //_bl0937_current_pulse_width = pulseIn(_bl0937_cf1_pin, 1, _bl0937_pulse_timeout);
+        _bl0937_current_pulse_width = _bl0937_get_pulse_in(_bl0937_cf1_pin, 1, _bl0937_pulse_timeout);
     }
 
     _bl0937_current = (_bl0937_current_pulse_width > 0) ? _bl0937_current_multiplier / _bl0937_current_pulse_width / 2 : 0;
@@ -164,7 +186,7 @@ unsigned int bl0937_get_voltage(void)
     if (_bl0937_use_interrupts) {
         _bl0937_check_cf1_signal();
     } else if (_bl0937_mode != _bl0937_current_mode) {
-        //_bl0937_voltage_pulse_width = pulseIn(_bl0937_cf1_pin, 1, _pulse_timeout);
+        _bl0937_voltage_pulse_width = _bl0937_get_pulse_in(_bl0937_cf1_pin, 1, _bl0937_pulse_timeout);
     }
     _bl0937_voltage = (_bl0937_voltage_pulse_width > 0) ? _bl0937_voltage_multiplier / _bl0937_voltage_pulse_width / 2 : 0;
     return _bl0937_voltage;
@@ -175,7 +197,7 @@ unsigned int bl0937_get_active_power(void)
     if (_bl0937_use_interrupts) {
         _bl0937_check_cf_signal();
     } else {
-        // _bl0937_power_pulse_width = pulseIn(_bl0937_cf_pin, 1, _bl0937_pulse_timeout);
+        _bl0937_power_pulse_width = _bl0937_get_pulse_in(_bl0937_cf_pin, 1, _bl0937_pulse_timeout);
     }
     _bl0937_power = (_bl0937_power_pulse_width > 0) ? _bl0937_power_multiplier / _bl0937_power_pulse_width / 2 : 0;
     return _bl0937_power;
@@ -212,7 +234,8 @@ unsigned long bl0937_get_energy(void)
 {
 
     // Counting pulses only works in IRQ mode
-    if (!_bl0937_use_interrupts) return 0;
+    if (!_bl0937_use_interrupts)
+        return 0;
 
     /*
         Pulse count is directly proportional to energy:
@@ -307,48 +330,62 @@ void IRAM_ATTR gpio_isr_handler_bl0937_cf1(void* arg)
     _bl0937_last_cf1_interrupt = now;
 }
 
-void _task_bl0937(void *arg)
+uint32_t _bl0937_get_pulse_in(uint32_t pin, uint32_t level, uint32_t timeout_us)
 {
-    
-}
+    uint32_t pulse_duration = 0;
+    TickType_t start_time = xTaskGetTickCount();
+    bool pulse_started = false;
 
-esp_err_t _bl0937_init_task(void)
-{
-    if (xTaskCreate(_task_bl0937, "bl0937", _bl0937_task_stack_size, NULL, _bl0937_task_priority, &_bl0937_task_handle) == pdTRUE) {
-        return ESP_OK;
-    } else {
-        return ESP_FAIL;
+    while (gpio_get_level(pin) != level) {
+        if (xTaskGetTickCount() - start_time >= pdMS_TO_TICKS(timeout_us / 1000)) {
+            return 0;  // Timeout
+        }
     }
-    return ESP_FAIL;
+
+    while (1) {
+        if (gpio_get_level(pin) == level) {
+            if (!pulse_started) {
+                start_time = xTaskGetTickCount();
+                pulse_started = true;
+            }
+        } else if (pulse_started) {
+            pulse_duration = (xTaskGetTickCount() - start_time) * portTICK_PERIOD_MS;
+            break;
+        }
+    }
+
+    return pulse_duration;
 }
 
 esp_err_t _bl0937_init_interrupt(void)
 {
-    // TODO add error handling
-    gpio_install_isr_service(0);
-    gpio_isr_handler_add(_bl0937_cf_pin, gpio_isr_handler_bl0937_cf, NULL);
-    gpio_isr_handler_add(_bl0937_cf1_pin, gpio_isr_handler_bl0937_cf1, NULL);
-    return ESP_OK;
+    esp_err_t err = gpio_install_isr_service(0);
+    if (err != ESP_OK) {
+        ESP_LOGE("Could not install ISR service!");
+        return err;
+    }
+
+    err = gpio_isr_handler_add(_bl0937_cf_pin, gpio_isr_handler_bl0937_cf, NULL);
+    if (err == ESP_ERR_INVALID_ARG)
+        ESP_LOGE(TAG, "Pin configuration for CF pin is invalid!");
+    else
+        ESP_LOGE(TAG, "Error in adding ISR handler for CF pin");
+
+    err = gpio_isr_handler_add(_bl0937_cf1_pin, gpio_isr_handler_bl0937_cf1, NULL);
+    if (err == ESP_ERR_INVALID_ARG)
+        ESP_LOGE(TAG, "Pin configuration for CF1 pin is invalid!");
+    else
+        ESP_LOGE(TAG, "Error in adding ISR handler for CF1 pin");
+
+    return err;
 }
 
-esp_err_t _bl0937_init_gpio(bl0937_config_t *config)
+esp_err_t _bl0937_init_gpio(void)
 {
-    // TODO add error handling
-
-    // check pins
-    if (config->pins.cf_pin  < 0 ||
-        config->pins.cf1_pin < 0 ||
-        config->pins.sel_pin < 0)
-        return ESP_FAIL;
-
-    _bl0937_cf_pin          = config->pins.cf_pin;
-    _bl0937_cf1_pin         = config->pins.cf1_pin;
-    _bl0937_sel_pin         = config->pins.sel_pin;
-
     // configure cf input pin
     gpio_config_t io_conf1;
     io_conf1.intr_type = GPIO_INTR_POSEDGE;
-    io_conf1.pin_bit_mask = (1ULL << config->pins.cf_pin);
+    io_conf1.pin_bit_mask = (1ULL << _bl0937_cf_pin);
     io_conf1.mode = GPIO_MODE_INPUT;
     io_conf1.pull_up_en = GPIO_PULLUP_ENABLE;
     io_conf1.pull_down_en = GPIO_PULLDOWN_DISABLE;
@@ -358,7 +395,7 @@ esp_err_t _bl0937_init_gpio(bl0937_config_t *config)
     // configure cf1 input pin
     gpio_config_t io_conf2;
     io_conf2.intr_type = GPIO_INTR_POSEDGE;
-    io_conf2.pin_bit_mask = (1ULL << config->pins.cf1_pin);
+    io_conf2.pin_bit_mask = (1ULL << _bl0937_cf1_pin);
     io_conf2.mode = GPIO_MODE_INPUT;
     io_conf2.pull_up_en = GPIO_PULLUP_ENABLE;
     io_conf2.pull_down_en = GPIO_PULLDOWN_DISABLE;
