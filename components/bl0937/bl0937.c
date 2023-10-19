@@ -361,7 +361,7 @@ esp_err_t _bl0937_init_interrupt(void)
 {
     esp_err_t err = gpio_install_isr_service(0);
     if (err != ESP_OK) {
-        ESP_LOGE("Could not install ISR service!");
+        ESP_LOGE(TAG, "Could not install ISR service!");
         return err;
     }
 
