@@ -45,7 +45,8 @@ extern "C" {
 #endif
 
 // Internal voltage reference value
-#define V_REF               1.218
+#define V_REF               2.43
+//#define V_REF               1.218
 
 // The factor of a 1mOhm resistor
 // as per recomended circuit in datasheet
