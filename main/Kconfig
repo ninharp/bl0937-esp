@@ -1,0 +1,15 @@
+menu "Klyqa-Sensors Configuration"
+
+    choice SENSORS_PRODUCT
+        bool "Select the Sensor Product to build"
+        default SENSORS_PRODUCT_SMART_PLUG
+        help
+            The type of the Klyqa Sensors Product Line to create
+            a Firmware for.
+
+        config SENSORS_PRODUCT_SMART_PLUG
+            bool "Klyqa-Sensors Smart Plug"
+
+    endchoice
+
+endmenu
