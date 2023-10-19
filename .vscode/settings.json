@@ -3,6 +3,7 @@
   "idf.flashType": "UART",
   "idf.adapterTargetName": "esp32c3",
   "files.associations": {
-    "*.inc": "c"
+    "*.inc": "c",
+    "chrono": "c"
   }
 }

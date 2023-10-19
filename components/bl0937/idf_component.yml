@@ -1,0 +1,7 @@
+version: "1.0.0"
+description: BL0937 Energy Meter IC Driver
+dependencies:
+  # Required IDF version
+  idf:
+    version: ">=5.0"
+    

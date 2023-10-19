@@ -1,0 +1,17 @@
+menu "BL0937 Energy Meter Configuration"
+
+    config BL0937_PULSE_TIME
+        int "BL0937 Sample Period Time (us)"
+        range 0 20000000
+        default 2000000
+        help
+            Maximum pulse with in microseconds
+            If longer than this pulse width is reset to 0
+            This value is purely experimental.
+            Higher values allow for a better precission but reduce sampling rate
+            and response speed to change
+            Lower values increase sampling rate but reduce precission
+            Values below 0.5s are not recommended since current and voltage output
+            will have no time to stabilise
+
+endmenu

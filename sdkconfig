@@ -1482,10 +1482,10 @@ CONFIG_WPA_MBEDTLS_TLS_CLIENT=y
 # end of Supplicant
 
 #
-# Klyqa-Sensors Configuration
+# BL0937 Energy Meter Configuration
 #
-CONFIG_SENSORS_PRODUCT_SMART_PLUG=y
-# end of Klyqa-Sensors Configuration
+CONFIG_BL0937_PULSE_TIME=2000000
+# end of BL0937 Energy Meter Configuration
 # end of Component config
 
 # Deprecated options for backward compatibility
